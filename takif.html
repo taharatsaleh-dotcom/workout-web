@@ -21,17 +21,246 @@
 <body>
 <script>
 (function() {
-  var SESSION_KEY = 'wt_session';
+  // ── Session ──────────────────────────────────────────────────────────────
+  var USERNAME = 'takif';
+  var ROLE     = 'client';
+  var SB_URL   = 'https://bjlhoxpaxjebndklxwqr.supabase.co';
+  var SB_KEY   = 'sb_publishable_3vstXfl7zhf73Zvo0viQxw_X0jb-s0_';
   var SESSION_DURATION = 7776000000;
-  var session = null;
-  try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch {}
-  if (!session || !session.expires || Date.now() > session.expires || session.username !== 'takif') {
-    session = { username: 'takif', role: 'client', name: 'Takif', expires: Date.now() + SESSION_DURATION };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  }
+  var SKIP_KEYS = ['wt_session'];
+
+  // Auto-login
+  var session = { username: USERNAME, role: ROLE, name: 'Takif', expires: Date.now() + SESSION_DURATION };
+  localStorage.setItem('wt_session', JSON.stringify(session));
   window.__wtUser = session;
+
+  // ── UK time helper ───────────────────────────────────────────────────────
+  function ukNow() {
+    return new Date().toLocaleString('en-GB', { timeZone: 'Europe/London' });
+  }
+  function ukTimestamp() {
+    // ISO string adjusted to UK timezone offset for storage
+    var now = new Date();
+    var ukStr = now.toLocaleString('en-GB', { timeZone: 'Europe/London', hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    // ukStr: "30/09/2026, 14:32:01"
+    var p = ukStr.split(/[/, :]/);
+    return p[2]+'-'+p[1]+'-'+p[0]+'T'+p[4]+':'+p[5]+':'+p[6]+'Z';
+  }
+
+  // ── Supabase helpers ─────────────────────────────────────────────────────
+  function sbHeaders() {
+    return { 'Content-Type': 'application/json', 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
+  }
+
+  function sbUpsert(key, value) {
+    if (!SB_URL || SB_URL === 'SUPABASE_URL_HERE') return;
+    fetch(SB_URL + '/rest/v1/sync_data', {
+      method: 'POST',
+      headers: Object.assign({}, sbHeaders(), { 'Prefer': 'resolution=merge-duplicates' }),
+      body: JSON.stringify({ username: USERNAME, key: key, value: value, updated_at: ukTimestamp() })
+    }).catch(function(){});
+  }
+
+  function sbFetch(targetUser) {
+    if (!SB_URL || SB_URL === 'SUPABASE_URL_HERE') return Promise.resolve([]);
+    return fetch(SB_URL + '/rest/v1/sync_data?username=eq.' + targetUser + '&select=key,value', {
+      headers: sbHeaders()
+    }).then(function(r) { return r.json(); }).catch(function() { return []; });
+  }
+
+  // ── Hydrate localStorage from Supabase on load ───────────────────────────
+  var _realSetItem = localStorage.setItem.bind(localStorage);
+  var _realGetItem = localStorage.getItem.bind(localStorage);
+
+  sbFetch(USERNAME).then(function(rows) {
+    if (!Array.isArray(rows)) return;
+    rows.forEach(function(row) {
+      if (row.key && row.value !== undefined && !SKIP_KEYS.includes(row.key)) {
+        _realSetItem(row.key, row.value);
+      }
+    });
+    console.log('[sync] Loaded ' + rows.length + ' keys from Supabase for ' + USERNAME);
+  });
+
+  // ── Intercept localStorage.setItem to sync writes ────────────────────────
+  localStorage.setItem = function(key, value) {
+    _realSetItem(key, value);
+    if (!SKIP_KEYS.includes(key)) {
+      sbUpsert(key, value);
+    }
+  };
+
+
 })();
 </script>
+
+<script>
+(function() {
+  const USERS = {
+    coach: {
+      hash: '73a07052a1d42f78c23005d07ac2c68db7f9913e8fc4c9405e78c36c92c2baf3',
+      role: 'coach',
+      name: 'Coach'
+    },
+    takif: {
+      hash: '508f72089d42b5c71c629bf765ed42502703f09169c8642214b71c2361f032aa',
+      role: 'client',
+      name: 'Takif'
+    }
+  };
+
+  const SESSION_KEY = 'wt_session';
+  const SESSION_DURATION = 90 * 24 * 60 * 60 * 1000; // 3 months in ms
+
+  function getSession() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+      if (!s || !s.expires || Date.now() > s.expires) return null;
+      return s;
+    } catch { return null; }
+  }
+
+  function setSession(username, role, name) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      username, role, name,
+      expires: Date.now() + SESSION_DURATION
+    }));
+  }
+
+  async function hashPassword(password) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Inject the auth overlay immediately — before the bundle renders
+  const overlay = document.createElement('div');
+  overlay.id = '__auth_overlay';
+  overlay.innerHTML = `
+    <style>
+      #__auth_overlay {
+        position: fixed; inset: 0; z-index: 999999;
+        background: #0d0d0d;
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      #__auth_box {
+        width: 340px;
+        background: #161616;
+        border: 1px solid #2a2a2a;
+        border-radius: 16px;
+        padding: 36px 32px;
+      }
+      #__auth_logo {
+        font-size: 22px; font-weight: 900; letter-spacing: -0.5px;
+        color: #f0f0f0; margin-bottom: 6px;
+      }
+      #__auth_logo span { color: #f97316; }
+      #__auth_sub {
+        font-size: 12px; color: #666; margin-bottom: 28px;
+      }
+      #__auth_form label {
+        display: block; font-size: 11px; font-weight: 700;
+        letter-spacing: 0.5px; color: #888; text-transform: uppercase;
+        margin-bottom: 6px;
+      }
+      #__auth_form input {
+        display: block; width: 100%;
+        background: #0d0d0d; border: 1px solid #2a2a2a;
+        border-radius: 8px; color: #f0f0f0;
+        font-size: 14px; padding: 10px 12px;
+        margin-bottom: 14px; outline: none;
+        transition: border-color .15s;
+        box-sizing: border-box;
+      }
+      #__auth_form input:focus { border-color: #f97316; }
+      #__auth_submit {
+        width: 100%; background: #f97316; color: #000;
+        font-weight: 800; font-size: 14px; border: none;
+        border-radius: 8px; padding: 12px; cursor: pointer;
+        margin-top: 4px; transition: opacity .15s;
+      }
+      #__auth_submit:hover { opacity: .88; }
+      #__auth_error {
+        color: #ef4444; font-size: 12px; text-align: center;
+        margin-top: 12px; min-height: 18px;
+      }
+    </style>
+    <div id="__auth_box">
+      <div id="__auth_logo">THE <span>SPLIT</span></div>
+      <div id="__auth_sub">Sign in to continue.</div>
+      <form id="__auth_form" autocomplete="off">
+        <label>Username</label>
+        <input type="text" id="__auth_user" autocomplete="username" spellcheck="false">
+        <label>Password</label>
+        <input type="password" id="__auth_pass" autocomplete="current-password">
+        <button type="submit" id="__auth_submit">Sign In</button>
+        <div id="__auth_error"></div>
+      </form>
+    </div>
+  `;
+  document.body.prepend(overlay);
+
+  // Block the bundler thumbnail/loading UI from showing
+  const thumb = document.getElementById('__bundler_thumbnail');
+  const loading = document.getElementById('__bundler_loading');
+  if (thumb) thumb.style.display = 'none';
+  if (loading) loading.style.display = 'none';
+
+  const session = getSession();
+  if (session) {
+    // Already logged in — remove overlay and expose user
+    window.__wtUser = session;
+    overlay.remove();
+    if (thumb) thumb.style.display = '';
+    if (loading) loading.style.display = '';
+    return;
+  }
+
+  // Show login
+  document.getElementById('__auth_form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const username = document.getElementById('__auth_user').value.trim().toLowerCase();
+    const password = document.getElementById('__auth_pass').value;
+    const errEl = document.getElementById('__auth_error');
+    const btn = document.getElementById('__auth_submit');
+
+    errEl.textContent = '';
+    btn.textContent = 'Signing in...';
+    btn.disabled = true;
+
+    const user = USERS[username];
+    if (!user) {
+      errEl.textContent = 'Invalid username or password.';
+      btn.textContent = 'Sign In';
+      btn.disabled = false;
+      return;
+    }
+
+    const hash = await hashPassword(password);
+    if (hash !== user.hash) {
+      errEl.textContent = 'Invalid username or password.';
+      btn.textContent = 'Sign In';
+      btn.disabled = false;
+      return;
+    }
+
+    setSession(username, user.role, user.name);
+    window.__wtUser = { username, role: user.role, name: user.name };
+    overlay.remove();
+    // Resume bundler loading
+    const thumb2 = document.getElementById('__bundler_thumbnail');
+    const loading2 = document.getElementById('__bundler_loading');
+    if (thumb2) thumb2.style.display = '';
+    if (loading2) loading2.style.display = '';
+  });
+
+  // Focus username field
+  setTimeout(() => { document.getElementById('__auth_user')?.focus(); }, 50);
+})();
+</script>
+
   <div id="__bundler_thumbnail"><svg xmlns="http://www.w3.org/2000/svg" sc-camel-view-box="0 0 100 100"><rect width="100" height="100" fill="#121212"></rect><rect x="30" y="30" width="40" height="40" fill="#d42a1f"></rect></svg></div>
   <div id="__bundler_loading">Unpacking...</div>
 
